@@ -17,6 +17,10 @@ ssh2 = "0.9.6"
 tui-term = "0.3.4"
 vt100 = "0.16.2"
 
+# Only to ask the kernel where a local shell is, which Linux answers in /proc.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.189"
+
 [features]
 # Statically link OpenSSL so the binary runs on machines that do not have it.
 # libssh2 itself is always built from source by libssh2-sys.

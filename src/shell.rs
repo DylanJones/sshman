@@ -1054,15 +1054,52 @@ fn title_dir(payload: &str) -> Option<String> {
 
 /// The directory a process on this machine is in, asked of the kernel.
 ///
-/// Only Linux keeps this somewhere readable. Everywhere else a shell has to
-/// say where it is for us to know, which is what [`OscWatch`] is for.
+/// Linux keeps it in `/proc`, and macOS answers `proc_pidinfo`. Everywhere
+/// else a shell has to say where it is for us to know, which is what
+/// [`OscWatch`] is for.
 #[cfg(target_os = "linux")]
 fn cwd_of_process(pid: u32) -> Option<String> {
     let link = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
     Some(link.to_str()?.to_string())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn cwd_of_process(pid: u32) -> Option<String> {
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>();
+    // SAFETY: a plain C struct of integers and characters, for which all
+    // zeroes is a value like any other.
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    // SAFETY: the buffer is `info` itself, and the size given is its own.
+    // The kernel writes no more than that, and says how much it did write.
+    let wrote = unsafe {
+        libc::proc_pidinfo(
+            pid.try_into().ok()?,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&raw mut info).cast(),
+            size.try_into().ok()?,
+        )
+    };
+    // Anything short of the whole struct is a process that has gone, or one
+    // that is not ours to ask about.
+    if usize::try_from(wrote).ok()? != size {
+        return None;
+    }
+    // The path is one buffer of MAXPATHLEN that libc writes as rows of 32,
+    // for the sake of an old compiler. Read as one, up to its terminator.
+    let bytes: Vec<u8> = info
+        .pvi_cdir
+        .vip_path
+        .as_flattened()
+        .iter()
+        .map(|&c| c as u8)
+        .collect();
+    let path = std::ffi::CStr::from_bytes_until_nul(&bytes).ok()?;
+    let path = path.to_str().ok()?;
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn cwd_of_process(_pid: u32) -> Option<String> {
     None
 }
@@ -2264,11 +2301,11 @@ mod tests {
         set_rich_keys(false);
     }
 
-    /// Linux only: that is where the kernel says where a process is. Anywhere
-    /// else a shell is only followed if its prompt sends OSC 7, which the
-    /// plain `sh` a test starts does not.
+    /// Only where the kernel says where a process is. Anywhere else a shell is
+    /// only followed if its prompt sends OSC 7, which the plain `sh` a test
+    /// starts does not.
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn a_local_shell_that_moves_says_where_it_went() {
         // A real pty and a real shell: the point is that `cd` inside one is
         // noticed from out here, which is what a saved session writes down.
