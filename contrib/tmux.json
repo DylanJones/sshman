@@ -1,0 +1,13 @@
+{
+  "keys": {
+    "command": ["ctrl-b"],
+    "zoom": ["z", "F3"],
+    "scroll": ["[", "]"],
+    "split": ["%", "|"],
+    "split-down": ["\"", "_"],
+    "close-pane": ["x", "F9"],
+    "close-tab": ["&", "W"],
+    "archive": ["Z"],
+    "extract": ["u"]
+  }
+}

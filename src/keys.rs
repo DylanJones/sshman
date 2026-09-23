@@ -868,6 +868,29 @@ mod tests {
     }
 
     #[test]
+    fn the_tmux_keys_in_contrib_still_mean_something() {
+        // An example nobody runs goes stale the day an action is renamed, and
+        // then someone copies it and finds their prefix key does nothing.
+        #[derive(serde::Deserialize)]
+        struct File {
+            keys: BTreeMap<String, Vec<String>>,
+        }
+        let file: File =
+            serde_json::from_str(include_str!("../contrib/tmux.json")).expect("it is JSON");
+        let map = Keymap::with(&file.keys);
+        assert!(map.problems.is_empty(), "{:?}", map.problems);
+        assert_eq!(
+            map.action(&key(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            Some(Action::Command)
+        );
+        assert_eq!(
+            map.action(&key(KeyCode::Char('%'), KeyModifiers::SHIFT)),
+            Some(Action::Split),
+            "a symbol's shift is the keyboard's business"
+        );
+    }
+
+    #[test]
     fn no_two_actions_start_out_sharing_a_key() {
         let mut map = Keymap::default();
         map.report_clashes();
