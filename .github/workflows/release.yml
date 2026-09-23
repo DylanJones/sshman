@@ -1,0 +1,143 @@
+# Release builds for every pull request, published for every push to main.
+#
+# Linux is built once, on one runner, for both architectures: cargo-zigbuild
+# uses zig as the C compiler and linker, which is what lets OpenSSL and
+# libssh2 go into a fully static musl binary for a machine the runner is not.
+# macOS is built on a Mac, since linking for it needs Apple's SDK, and a Mac
+# builds for Intel as readily as for its own chip.
+#
+# What a release is called comes from .github/release-name.sh: `0.1.1` for the
+# first commit of 0.1.1, `0.1.1-abc1234` for each one after it. The ones with
+# a hash are prereleases, so the latest release is always a version.
+
+name: Release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests make way for a newer push; main queues, so no release is
+  # cut short half published.
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ZIG_VERSION: 0.14.1
+  ZIGBUILD_VERSION: 0.23.4
+
+jobs:
+  name:
+    name: Name the release
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.name.outputs.name }}
+      prerelease: ${{ steps.name.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: name
+        run: sh .github/release-name.sh | tee -a "$GITHUB_OUTPUT"
+
+  linux:
+    name: Build (Linux)
+    needs: name
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install zig and cargo-zigbuild
+        run: |
+          curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" \
+            | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-$ZIG_VERSION" >> "$GITHUB_PATH"
+          cargo install --locked "cargo-zigbuild@$ZIGBUILD_VERSION"
+      - name: Build
+        run: |
+          mkdir dist
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            cargo zigbuild --locked --release --features vendored --target "$target"
+            tar -czf "dist/sshman-${{ needs.name.outputs.name }}-$target.tar.gz" \
+              -C "target/$target/release" sshman
+          done
+      - name: Check they are static
+        run: |
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            file "target/$target/release/sshman" | tee /dev/stderr | grep -q 'statically linked'
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sshman-linux
+          path: dist/*
+
+  macos:
+    name: Build (macOS)
+    needs: name
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: |
+          mkdir dist
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --locked --release --features vendored --target "$target"
+            tar -czf "dist/sshman-${{ needs.name.outputs.name }}-$target.tar.gz" \
+              -C "target/$target/release" sshman
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sshman-macos
+          path: dist/*
+
+  publish:
+    name: Publish
+    needs: [name, linux, macos]
+    # Main only, and not in a fork: syncing a fork is a push to its main too,
+    # and should not leave a trail of releases there.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NAME: ${{ needs.name.outputs.name }}
+      PRERELEASE: ${{ needs.name.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        run: |
+          cd dist
+          sha256sum sshman-* > SHA256SUMS
+          tag="v$NAME"
+          # A rerun finds its release already there: replace the files rather
+          # than failing over a name that is already taken.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" ./* --clobber --repo "$GITHUB_REPOSITORY"
+            exit 0
+          fi
+          if [ "$PRERELEASE" = true ]; then
+            flag=--prerelease
+          else
+            flag=--latest
+          fi
+          gh release create "$tag" ./* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$NAME" \
+            --generate-notes \
+            "$flag"

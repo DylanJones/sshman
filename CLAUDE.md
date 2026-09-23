@@ -27,6 +27,13 @@ and root-only files, then runs the `#[ignore]`d tests with `HOME` redirected at
 a scratch dir (so accepting the test host key does not touch your real
 `known_hosts`). It needs `docker` and `python3`.
 
+GitHub Actions runs the tests on Linux and macOS for every pull request and
+push to `main` (`ci.yml`), and builds release binaries for both (`release.yml`).
+**Every push to `main` publishes a release**: `0.1.1` for the first commit of a
+version in `Cargo.toml`, `0.1.1-abc1234` (a prerelease) for each one after.
+`.github/release-name.sh` decides which. So cutting a version is bumping
+`Cargo.toml` and merging; the workflow makes the tag.
+
 ## Architecture
 
 Three threads and one rule: **the UI thread never blocks on the network.**
