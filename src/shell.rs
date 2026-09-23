@@ -2236,7 +2236,11 @@ mod tests {
     #[test]
     fn text_is_picked_out_of_the_screen_and_let_go_of_when_it_moves() {
         let mut shell = Shell::spawn_local(Path::new("/"), 24, 80);
-        shell.type_in("printf 'alpha\\nbravo\\n'\n");
+        // The newline first because this is typed before the shell has drawn
+        // its prompt. The terminal echoes the line straight away, a shell
+        // like dash prints `$ ` after it, and without the newline `alpha`
+        // would share that row with the prompt.
+        shell.type_in("printf '\\nalpha\\nbravo\\n'\n");
 
         // A row of its own, not the echoed command line that also holds the
         // word: what is being picked out here is the output.
