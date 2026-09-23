@@ -194,13 +194,7 @@ impl History {
 }
 
 fn history_path() -> Option<PathBuf> {
-    // Terminal tools live in ~/.config on both Linux and macOS, whatever
-    // `dirs::config_dir()` says about Application Support.
-    let base = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => dirs::home_dir()?.join(".config"),
-    };
-    Some(base.join("sshman").join("hosts.json"))
+    Some(crate::config::config_dir()?.join("hosts.json"))
 }
 
 #[cfg(unix)]

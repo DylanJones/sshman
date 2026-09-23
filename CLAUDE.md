@@ -143,8 +143,8 @@ are shared across tabs (there is only one local machine); each tab's
 arrangement decides which it shows.
 
 **Where a shell is.** A pty carries characters, not state, so a shell's cwd
-cannot be read off. Three sources, in order of trust: `/proc` (local only,
-always right), `OSC 7` (right anywhere, but only if the prompt sends it), the
+cannot be read off. Three sources, in order of trust: the kernel (local only,
+always right; `/proc` on Linux, `proc_pidinfo` on macOS), `OSC 7` (right anywhere, but only if the prompt sends it), the
 window title matched strictly against `user@host: dir`. Failing all three, the
 directory it started in.
 

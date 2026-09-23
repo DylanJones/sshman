@@ -1519,11 +1519,20 @@ const COMMAND: &[Hint] = &[
     ("@new-list", "list"),
     ("@close-pane", "close"),
     ("@zoom", "zoom"),
+    ("@scroll", "scroll"),
     ("@arrange", "arrange"),
     ("@copy-text", "copy"),
     ("@connect", "connect"),
     ("@help", "help"),
     ("Esc", "back"),
+];
+/// While reading back through a terminal's history.
+const SCROLLING: &[Hint] = &[
+    ("↑↓", "line"),
+    ("PgUp PgDn", "page"),
+    ("Ctrl-u Ctrl-d", "half"),
+    ("g G", "oldest, newest"),
+    ("q", "back to the prompt"),
 ];
 /// And while one of them has been picked up.
 const CARRYING: &[Hint] = &[
@@ -1640,6 +1649,7 @@ const ALL_HINTS: &[&[Hint]] = &[
     SHELL,
     COMMAND,
     CARRYING,
+    SCROLLING,
     ZOOMED,
     LOCAL_TAB,
     BROWSE,
@@ -1667,6 +1677,7 @@ fn hints_for(app: &App) -> &'static [Hint<'static>] {
         Mode::Browse if app.menu.is_some() => MENU,
         // Waiting on the key after Ctrl-], the only useful thing to show is
         // what that key can be.
+        Mode::Browse if app.scrolling => SCROLLING,
         Mode::Browse if app.carrying => CARRYING,
         Mode::Browse if app.commanding => COMMAND,
         // A focused shell takes every key, so only the way out is worth
@@ -2688,17 +2699,27 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(rect).inner(Margin::new(1, 0));
     f.render_widget(block, rect);
 
+    // The key that hands the keyboard to sshman is the one piece of this
+    // page it is no use getting wrong: it is how you reach everything else
+    // from inside a shell. So it says the one you have, not the one we ship.
+    let prefix = app
+        .keymap
+        .first(Action::Command)
+        .map(|chord| chord.to_string())
+        .unwrap_or_else(|| "—".into());
     let mut lines = Vec::new();
     for (key, desc) in HELP {
+        let desc = desc.replace("Ctrl-]", &prefix);
         if key.is_empty() {
             lines.push(Line::from(Span::styled(
-                desc.to_string(),
+                desc,
                 Style::new().fg(theme.accent).bold(),
             )));
         } else {
+            let key = key.replace("Ctrl-]", &prefix);
             lines.push(Line::from(vec![
                 Span::styled(format!("  {key:<14}"), Style::new().fg(theme.warn)),
-                Span::raw(desc.to_string()),
+                Span::raw(desc),
             ]));
         }
     }
@@ -3033,6 +3054,12 @@ pub const HELP: &[(&str, &str)] = &[
         "  by its name and letting go over another does the same with",
     ),
     ("", "  the mouse."),
+    ("[", "read back through the focused shell's history"),
+    (
+        "",
+        "  ↑ ↓ a line, PgUp PgDn a page, g G the oldest and newest;",
+    ),
+    ("", "  q goes back to the prompt. The wheel scrolls it too."),
     ("Esc / Ctrl-]", "put the keyboard back where it was"),
     (
         "",
@@ -3462,10 +3489,25 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
 
+    /// A directory of its own for each frame. One per process was shared by
+    /// every test running alongside, and whichever finished first took it
+    /// away from the rest.
+    ///
+    /// Under `/tmp` rather than the system's temporary directory, which on
+    /// macOS is forty characters of `/var/folders/…` — long enough that a
+    /// half-width pane shortens the trail, and the crumb tests are about the
+    /// trail at full length.
+    fn scratch() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = std::path::Path::new("/tmp").canonicalize().unwrap();
+        tmp.join(format!("sshman-ui-{}-{n}", std::process::id()))
+    }
+
     /// Draw a whole frame and hand back the screen itself, for tests that
     /// care about how a cell is painted rather than what it says.
     fn painted(width: u16, height: u16, setup: impl FnOnce(&mut App)) -> (App, Buffer) {
-        let dir = std::env::temp_dir().join(format!("sshman-ui-{}", std::process::id()));
+        let dir = scratch();
         std::fs::create_dir_all(&dir).unwrap();
         let mut app = App::new(ConnectOpts::default(), dir.clone(), None, false);
         app.mode = Mode::Browse;
@@ -3481,7 +3523,7 @@ mod tests {
     /// Draw a whole frame and hand back what landed on the screen, along with
     /// the app that recorded where it put things.
     fn frame(width: u16, height: u16, setup: impl FnOnce(&mut App)) -> (App, Vec<String>) {
-        let dir = std::env::temp_dir().join(format!("sshman-ui-{}", std::process::id()));
+        let dir = scratch();
         std::fs::create_dir_all(&dir).unwrap();
         let mut app = App::new(ConnectOpts::default(), dir.clone(), None, false);
         app.mode = Mode::Browse;
@@ -3499,6 +3541,30 @@ mod tests {
             .collect();
         std::fs::remove_dir_all(&dir).ok();
         (app, rows)
+    }
+
+    #[test]
+    fn the_help_names_the_command_key_you_have() {
+        // Every page of it, since the first mention is a page or two down.
+        let mut screen = String::new();
+        for top in (0..HELP.len()).step_by(20) {
+            let (_, rows) = frame(90, 40, |app| {
+                app.keymap = crate::keys::Keymap::with(&std::collections::BTreeMap::from([(
+                    "command".to_string(),
+                    vec!["ctrl-b".to_string()],
+                )]));
+                app.mode = Mode::Help;
+                app.help_scroll = top as u16;
+            });
+            screen.push_str(&rows.join("\n"));
+        }
+        assert!(
+            screen
+                .lines()
+                .any(|row| row.contains("Ctrl-b") && row.contains("hand the keyboard to sshman")),
+            "{screen}"
+        );
+        assert!(!screen.contains("Ctrl-]"), "{screen}");
     }
 
     #[test]

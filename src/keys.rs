@@ -63,6 +63,7 @@ pub enum Action {
     PaneCommand,
     ClosePane,
     Zoom,
+    Scroll,
     Even,
     Arrange,
     Command,
@@ -143,6 +144,7 @@ impl Action {
         Action::PaneCommand,
         Action::ClosePane,
         Action::Zoom,
+        Action::Scroll,
         Action::Even,
         Action::Arrange,
         Action::Command,
@@ -218,6 +220,7 @@ impl Action {
             Self::PaneCommand => "pane-command",
             Self::ClosePane => "close-pane",
             Self::Zoom => "zoom",
+            Self::Scroll => "scroll",
             Self::Even => "even",
             Self::Arrange => "arrange",
             Self::Command => "command",
@@ -294,6 +297,7 @@ impl Action {
             Self::PaneCommand => "what this shell pane runs, and runs again on restore",
             Self::ClosePane => "close the focused pane",
             Self::Zoom => "give the whole screen to this pane",
+            Self::Scroll => "read back through a terminal pane's history",
             Self::Even => "even the borders up again",
             Self::Arrange => "pick a ready-made arrangement",
             Self::Command => "hand the keyboard to sshman",
@@ -370,6 +374,7 @@ impl Action {
             | Self::PaneCommand
             | Self::ClosePane
             | Self::Zoom
+            | Self::Scroll
             | Self::Even
             | Self::Arrange
             | Self::Command
@@ -586,6 +591,7 @@ const DEFAULTS: &[(Action, &[&str])] = &[
     (Action::PaneCommand, &["$"]),
     (Action::ClosePane, &["F9"]),
     (Action::Zoom, &["m", "F3"]),
+    (Action::Scroll, &["["]),
     (Action::Even, &["="]),
     (Action::Arrange, &["A"]),
     (Action::Command, &["ctrl-]", "ctrl-5"]),
@@ -859,6 +865,29 @@ mod tests {
             names.push(action.name());
         }
         assert_eq!(names.len(), Action::ALL.len());
+    }
+
+    #[test]
+    fn the_tmux_keys_in_contrib_still_mean_something() {
+        // An example nobody runs goes stale the day an action is renamed, and
+        // then someone copies it and finds their prefix key does nothing.
+        #[derive(serde::Deserialize)]
+        struct File {
+            keys: BTreeMap<String, Vec<String>>,
+        }
+        let file: File =
+            serde_json::from_str(include_str!("../contrib/tmux.json")).expect("it is JSON");
+        let map = Keymap::with(&file.keys);
+        assert!(map.problems.is_empty(), "{:?}", map.problems);
+        assert_eq!(
+            map.action(&key(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            Some(Action::Command)
+        );
+        assert_eq!(
+            map.action(&key(KeyCode::Char('%'), KeyModifiers::SHIFT)),
+            Some(Action::Split),
+            "a symbol's shift is the keyboard's business"
+        );
     }
 
     #[test]

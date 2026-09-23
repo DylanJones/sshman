@@ -294,11 +294,14 @@ impl LocalConn {
 
     /// Copy inside this machine, which is what a transfer amounts to here.
     ///
-    /// Plain `cp -Rd`, not `cp -a`, for the same reason the sudo staging uses
+    /// Plain `cp -RP`, not `cp -a`, for the same reason the sudo staging uses
     /// it: a file already at the destination keeps its own mode, owner and
     /// group and only its contents change, so saving an edit cannot quietly
     /// rewrite the permissions of the file being edited. A new file is created
     /// with the source's mode.
+    ///
+    /// `-P` rather than GNU's `-d` for keeping a link a link: BSD `cp`, and so
+    /// macOS, has no `-d` and refused every copy.
     ///
     /// Progress is reported once at the end — there is no network to wait on,
     /// and a bar that fills in one step is honest about that.
@@ -310,7 +313,7 @@ impl LocalConn {
         progress: &mut dyn FnMut(u64),
     ) -> Result<()> {
         self.must(
-            &format!("cp -Rd -- {} {}/", sh_quote(from), sh_quote(into)),
+            &format!("cp -RP -- {} {}/", sh_quote(from), sh_quote(into)),
             elevated,
         )?;
         progress(tree_size(Path::new(from)));

@@ -536,12 +536,25 @@ pub fn default_shell() -> String {
 
 /// Where everything sshman remembers between sessions lives: this file, the
 /// saved servers, the workspaces, and any themes of your own.
+///
+/// Terminal tools live in ~/.config on both Linux and macOS, whatever
+/// `dirs::config_dir()` says about Application Support.
+#[cfg(not(test))]
 pub fn config_dir() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => dirs::home_dir()?.join(".config"),
     };
     Some(base.join("sshman"))
+}
+
+/// Under test, nowhere. A test that read the real one would pass or fail by
+/// whoever ran it — someone with their own keys finds `Ctrl-]` does nothing
+/// — and session restore writes as it goes, so one that wrote to it would
+/// change what that person's sshman opens with next time.
+#[cfg(test)]
+pub fn config_dir() -> Option<PathBuf> {
+    None
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -649,7 +662,12 @@ mod tests {
         // An empty spec means the pane is a shell prompt, and the editor is
         // run as a command — rather than typing nonsense into whatever is on
         // screen.
-        let config = Config::default();
+        // Named rather than left to `$EDITOR`, which unset means vi — an
+        // editor we know a great deal about.
+        let config = Config {
+            editor: Some("some-editor".into()),
+            ..Config::default()
+        };
         assert_eq!(config.editor_open("some-editor"), "");
         assert_eq!(config.editor_open(""), "");
         assert_eq!(

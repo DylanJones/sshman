@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::Target;
+use crate::config::config_dir;
 use crate::layout::{Layout, TermId};
 use crate::sshconn::ConnectOpts;
 
@@ -480,15 +481,6 @@ impl Workspaces {
 
 fn workspaces_path() -> Option<PathBuf> {
     Some(config_dir()?.join("workspaces.json"))
-}
-
-/// Where everything sshman remembers between sessions lives.
-fn config_dir() -> Option<PathBuf> {
-    let base = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => dirs::home_dir()?.join(".config"),
-    };
-    Some(base.join("sshman"))
 }
 
 #[cfg(unix)]

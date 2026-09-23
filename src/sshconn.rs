@@ -595,7 +595,7 @@ impl Conn {
         // into a trailing-slash directory behaves identically for files and
         // directories, which keeps this one code path correct for both.
         //
-        // Plain `cp -Rd` rather than `cp -a`: the staged copy is owned by the
+        // Plain `cp -RP` rather than `cp -a`: the staged copy is owned by the
         // login user and carries whatever mode the staging chmod left on it,
         // and `-a` would stamp all of that onto the destination. Saving an
         // edit of a root-owned 0640 config would hand it to the login user at
@@ -607,7 +607,7 @@ impl Conn {
         let result = (|| -> Result<()> {
             self.upload_tree(local, &staged, progress)?;
             self.must(
-                &format!("cp -Rd -- {} {}/", sh_quote(&staged), sh_quote(dest_dir)),
+                &format!("cp -RP -- {} {}/", sh_quote(&staged), sh_quote(dest_dir)),
                 true,
             )?;
             Ok(())

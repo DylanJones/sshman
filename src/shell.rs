@@ -37,7 +37,7 @@ use crate::sshconn::{ConnectOpts, establish};
 use crate::types::sh_quote;
 
 /// Lines of history kept above the visible screen.
-const SCROLLBACK: usize = 5_000;
+pub const SCROLLBACK: usize = 5_000;
 
 enum Msg {
     Bytes(Vec<u8>),
@@ -568,7 +568,7 @@ fn write_notice(parser: &Arc<Mutex<vt100::Parser>>, text: &str) {
 
 /// Hand `bytes` from the program inside to the screen, and return anything
 /// it has to be told in reply — the answer to a question it asked about the
-/// keyboard, which is the only thing here that talks back.
+/// keyboard, or about what sort of terminal this is.
 #[must_use]
 fn feed(hvp: &mut Hvp, parser: &Arc<Mutex<vt100::Parser>>, bytes: &[u8]) -> Vec<u8> {
     let fixed = hvp.rewrite(bytes);
@@ -707,8 +707,15 @@ fn configured_shell() -> Option<String> {
 }
 
 /// The program a shell pane on this machine runs.
+///
+/// Under test it is `/bin/sh` unless a test says otherwise. The shell of
+/// whoever runs them brings their startup files along, and a prompt that
+/// takes a few seconds to draw is not something sshman got wrong.
 pub fn local_shell() -> String {
-    configured_shell().unwrap_or_else(crate::config::default_shell)
+    configured_shell().unwrap_or_else(|| match cfg!(test) {
+        true => "/bin/sh".into(),
+        false => crate::config::default_shell(),
+    })
 }
 
 /// Everything the program inside says, on its way to the screen.
@@ -742,6 +749,9 @@ struct Hvp {
     /// untouched, because it is the terminal's business as well as ours.
     osc: OscWatch,
 }
+
+/// What sshman's terminal says it is when a program asks (`CSI c`).
+const PRIMARY_ATTRIBUTES: &[u8] = b"\x1b[?1;2c";
 
 /// Longer than any real CSI sequence. Past this we are not looking at one,
 /// so it goes to the parser untouched rather than being buffered for ever.
@@ -793,6 +803,18 @@ impl Hvp {
                     if byte == b'u' && matches!(params.first(), Some(b'?' | b'>' | b'<' | b'=')) {
                         let reply = kitty_request(&self.kitty, params);
                         self.replies.extend_from_slice(&reply);
+                        self.partial.clear();
+                        continue;
+                    }
+                    // `CSI c` is the program asking what sort of terminal it
+                    // is talking to. Every real one answers, so programs wait
+                    // for it — fish for ten seconds, and it sends this right
+                    // after the keyboard question precisely because a
+                    // terminal that ignores that one still answers this. The
+                    // answer is tmux's: a VT100 with advanced video, which
+                    // promises nothing the screen underneath cannot do.
+                    if byte == b'c' && matches!(params, b"" | b"0") {
+                        self.replies.extend_from_slice(PRIMARY_ATTRIBUTES);
                         self.partial.clear();
                         continue;
                     }
@@ -1047,15 +1069,52 @@ fn title_dir(payload: &str) -> Option<String> {
 
 /// The directory a process on this machine is in, asked of the kernel.
 ///
-/// Only Linux keeps this somewhere readable. Everywhere else a shell has to
-/// say where it is for us to know, which is what [`OscWatch`] is for.
+/// Linux keeps it in `/proc`, and macOS answers `proc_pidinfo`. Everywhere
+/// else a shell has to say where it is for us to know, which is what
+/// [`OscWatch`] is for.
 #[cfg(target_os = "linux")]
 fn cwd_of_process(pid: u32) -> Option<String> {
     let link = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
     Some(link.to_str()?.to_string())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn cwd_of_process(pid: u32) -> Option<String> {
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>();
+    // SAFETY: a plain C struct of integers and characters, for which all
+    // zeroes is a value like any other.
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    // SAFETY: the buffer is `info` itself, and the size given is its own.
+    // The kernel writes no more than that, and says how much it did write.
+    let wrote = unsafe {
+        libc::proc_pidinfo(
+            pid.try_into().ok()?,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&raw mut info).cast(),
+            size.try_into().ok()?,
+        )
+    };
+    // Anything short of the whole struct is a process that has gone, or one
+    // that is not ours to ask about.
+    if usize::try_from(wrote).ok()? != size {
+        return None;
+    }
+    // The path is one buffer of MAXPATHLEN that libc writes as rows of 32,
+    // for the sake of an old compiler. Read as one, up to its terminator.
+    let bytes: Vec<u8> = info
+        .pvi_cdir
+        .vip_path
+        .as_flattened()
+        .iter()
+        .map(|&c| c as u8)
+        .collect();
+    let path = std::ffi::CStr::from_bytes_until_nul(&bytes).ok()?;
+    let path = path.to_str().ok()?;
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn cwd_of_process(_pid: u32) -> Option<String> {
     None
 }
@@ -2092,6 +2151,26 @@ mod tests {
     }
 
     #[test]
+    fn asking_what_the_terminal_is_gets_an_answer_whatever_the_keyboard() {
+        // fish asks this after the keyboard question and waits ten seconds
+        // for it, so it has to be answered even where that one is not.
+        let _rich = RICH.lock().unwrap_or_else(|e| e.into_inner());
+        set_rich_keys(false);
+        let keys = Arc::new(Mutex::new(KittyKeys::default()));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(4, 20, 0)));
+        let mut hvp = Hvp::new(keys, Arc::new(Mutex::new(Reported::default())));
+
+        assert_eq!(feed(&mut hvp, &parser, b"\x1b[?u\x1b[c"), b"\x1b[?1;2c");
+        assert_eq!(feed(&mut hvp, &parser, b"\x1b[0c"), b"\x1b[?1;2c");
+        // Split across two reads, as a pty is free to deliver it.
+        assert!(feed(&mut hvp, &parser, b"ok\x1b[").is_empty());
+        assert_eq!(feed(&mut hvp, &parser, b"c"), b"\x1b[?1;2c");
+        // And none of it is drawn.
+        let screen = parser.lock().unwrap().screen().contents();
+        assert_eq!(screen.trim(), "ok");
+    }
+
+    #[test]
     fn asking_for_the_keyboard_protocol_is_answered_and_kept_off_the_screen() {
         let _rich = RICH.lock().unwrap_or_else(|e| e.into_inner());
         let keys = Arc::new(Mutex::new(KittyKeys::default()));
@@ -2192,7 +2271,11 @@ mod tests {
     #[test]
     fn text_is_picked_out_of_the_screen_and_let_go_of_when_it_moves() {
         let mut shell = Shell::spawn_local(Path::new("/"), 24, 80);
-        shell.type_in("printf 'alpha\\nbravo\\n'\n");
+        // The newline first because this is typed before the shell has drawn
+        // its prompt. The terminal echoes the line straight away, a shell
+        // like dash prints `$ ` after it, and without the newline `alpha`
+        // would share that row with the prompt.
+        shell.type_in("printf '\\nalpha\\nbravo\\n'\n");
 
         // A row of its own, not the echoed command line that also holds the
         // word: what is being picked out here is the output.
@@ -2257,7 +2340,11 @@ mod tests {
         set_rich_keys(false);
     }
 
+    /// Only where the kernel says where a process is. Anywhere else a shell is
+    /// only followed if its prompt sends OSC 7, which the plain `sh` a test
+    /// starts does not.
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn a_local_shell_that_moves_says_where_it_went() {
         // A real pty and a real shell: the point is that `cd` inside one is
         // noticed from out here, which is what a saved session writes down.

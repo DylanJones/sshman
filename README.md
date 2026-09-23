@@ -87,6 +87,7 @@ The essentials:
 | `S` `\|` `_` `T` | split: shell below, shell beside, shell down, another file list |
 | `i` | editor pane beside this one |
 | `m` / `F3`, `F9`, `=` | zoom, close pane, even the borders up |
+| `[` | read back through a shell pane's history, `q` to stop |
 | `A` | pick a ready-made arrangement for this tab |
 | `Alt-↑↓←→` | move between panes |
 | `C` `W`, `Ctrl-←/→` | new tab, close tab, switch tabs |
@@ -118,6 +119,13 @@ make sense there:
 | `g` | pick the pane up and move the pane instead |
 
 `Esc` or `Ctrl-]` again puts the keyboard back where it was.
+
+Coming from tmux? [`contrib/tmux.json`](contrib/tmux.json) is a set of keys
+that makes this feel like home: `Ctrl-b` as the prefix, then `%` and `"` to
+split, `z` to zoom, `x` to close, `[` to scroll back, `&` to close a tab.
+Copy its `"keys"` into your `config.json`. It moves two keys to make room:
+packing an archive becomes `Z` and unpacking `u`. And `Ctrl-b` no longer
+reaches the shell, where it moves the cursor back; `←` does the same.
 
 ## What it does
 
