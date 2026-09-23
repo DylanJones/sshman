@@ -568,7 +568,7 @@ fn write_notice(parser: &Arc<Mutex<vt100::Parser>>, text: &str) {
 
 /// Hand `bytes` from the program inside to the screen, and return anything
 /// it has to be told in reply — the answer to a question it asked about the
-/// keyboard, which is the only thing here that talks back.
+/// keyboard, or about what sort of terminal this is.
 #[must_use]
 fn feed(hvp: &mut Hvp, parser: &Arc<Mutex<vt100::Parser>>, bytes: &[u8]) -> Vec<u8> {
     let fixed = hvp.rewrite(bytes);
@@ -750,6 +750,9 @@ struct Hvp {
     osc: OscWatch,
 }
 
+/// What sshman's terminal says it is when a program asks (`CSI c`).
+const PRIMARY_ATTRIBUTES: &[u8] = b"\x1b[?1;2c";
+
 /// Longer than any real CSI sequence. Past this we are not looking at one,
 /// so it goes to the parser untouched rather than being buffered for ever.
 const MAX_CSI: usize = 64;
@@ -800,6 +803,18 @@ impl Hvp {
                     if byte == b'u' && matches!(params.first(), Some(b'?' | b'>' | b'<' | b'=')) {
                         let reply = kitty_request(&self.kitty, params);
                         self.replies.extend_from_slice(&reply);
+                        self.partial.clear();
+                        continue;
+                    }
+                    // `CSI c` is the program asking what sort of terminal it
+                    // is talking to. Every real one answers, so programs wait
+                    // for it — fish for ten seconds, and it sends this right
+                    // after the keyboard question precisely because a
+                    // terminal that ignores that one still answers this. The
+                    // answer is tmux's: a VT100 with advanced video, which
+                    // promises nothing the screen underneath cannot do.
+                    if byte == b'c' && matches!(params, b"" | b"0") {
+                        self.replies.extend_from_slice(PRIMARY_ATTRIBUTES);
                         self.partial.clear();
                         continue;
                     }
@@ -2133,6 +2148,26 @@ mod tests {
         // And the plain one is left alone even then, since it was never
         // ambiguous.
         assert_eq!(encode_rich(KeyCode::Enter, KeyModifiers::NONE), b"\r");
+    }
+
+    #[test]
+    fn asking_what_the_terminal_is_gets_an_answer_whatever_the_keyboard() {
+        // fish asks this after the keyboard question and waits ten seconds
+        // for it, so it has to be answered even where that one is not.
+        let _rich = RICH.lock().unwrap_or_else(|e| e.into_inner());
+        set_rich_keys(false);
+        let keys = Arc::new(Mutex::new(KittyKeys::default()));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(4, 20, 0)));
+        let mut hvp = Hvp::new(keys, Arc::new(Mutex::new(Reported::default())));
+
+        assert_eq!(feed(&mut hvp, &parser, b"\x1b[?u\x1b[c"), b"\x1b[?1;2c");
+        assert_eq!(feed(&mut hvp, &parser, b"\x1b[0c"), b"\x1b[?1;2c");
+        // Split across two reads, as a pty is free to deliver it.
+        assert!(feed(&mut hvp, &parser, b"ok\x1b[").is_empty());
+        assert_eq!(feed(&mut hvp, &parser, b"c"), b"\x1b[?1;2c");
+        // And none of it is drawn.
+        let screen = parser.lock().unwrap().screen().contents();
+        assert_eq!(screen.trim(), "ok");
     }
 
     #[test]
