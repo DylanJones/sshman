@@ -1120,8 +1120,8 @@ pub struct App {
     pub theme_name: String,
     /// Every theme there is: the ones sshman ships and any found on disk.
     pub themes: Themes,
-    /// Which keys ask for what: the scheme sshman ships, with whatever the
-    /// config file changed over the top.
+    /// Which keys ask for what: the key scheme the config names, with
+    /// whatever the config file changed over the top.
     pub keymap: Keymap,
     pub pager: String,
     /// The details the connection screen is working with — the active tab's
@@ -1265,7 +1265,7 @@ impl App {
             clipboard_out: None,
             selecting: None,
             cmd_history: Vec::new(),
-            keymap: Keymap::with(&config.keys),
+            keymap: Keymap::with(config.key_scheme(), &config.keys),
             config,
             editor,
             theme,
@@ -4159,7 +4159,8 @@ impl App {
             | Setting::ShellColours
             | Setting::Icons
             | Setting::Watch
-            | Setting::Resume => self.change_setting(setting, 1),
+            | Setting::Resume
+            | Setting::KeyScheme => self.change_setting(setting, 1),
             Setting::Editor | Setting::EditorOpen | Setting::Shell => self.ask_for_setting(setting),
         }
     }
@@ -4272,7 +4273,11 @@ impl App {
             KeyCode::Delete | KeyCode::Backspace => {
                 let action = self.selected_action();
                 self.keymap.reset(action);
-                self.save_keys(format!("{}: back to the key it ships with", action.name()));
+                let scheme = self.keymap.scheme().name();
+                self.save_keys(format!(
+                    "{}: back to the {scheme} scheme's key",
+                    action.name()
+                ));
             }
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Settings,
             _ => {}
@@ -4313,6 +4318,7 @@ impl App {
                 Setting::Icons => self.step_icons(step),
                 Setting::Watch => self.toggle_watch(),
                 Setting::Resume => self.toggle_resume(),
+                Setting::KeyScheme => self.step_key_scheme(step),
                 Setting::Keys => self.open_keys(),
                 Setting::Editor | Setting::EditorOpen | Setting::Shell => {}
             },
@@ -4347,6 +4353,7 @@ impl App {
             | Setting::Icons
             | Setting::Watch
             | Setting::Resume
+            | Setting::KeyScheme
             | Setting::Keys => {
                 return;
             }
@@ -4379,10 +4386,15 @@ impl App {
                 self.config.resume = None;
                 self.save_config("starting up offers the last session again".into());
             }
+            Setting::KeyScheme => {
+                self.config.key_scheme = None;
+                self.use_key_scheme();
+            }
             Setting::Keys => {
-                self.keymap = Keymap::default();
                 self.config.keys.clear();
-                self.save_config("keys: the ones sshman ships, all of them".into());
+                self.keymap = Keymap::of(self.config.key_scheme());
+                let scheme = self.config.key_scheme().name();
+                self.save_config(format!("keys: the {scheme} scheme's, all of them"));
             }
             Setting::Theme => {
                 self.config.theme = None;
@@ -4462,6 +4474,26 @@ impl App {
             ),
         };
         self.save_config(done);
+    }
+
+    /// Start from the next scheme's keys, keeping any of your own.
+    fn step_key_scheme(&mut self, step: isize) {
+        let next = self.config.key_scheme().step(step.signum());
+        self.config.key_scheme = Some(next.name().to_string());
+        self.use_key_scheme();
+    }
+
+    /// Rebuild the keys from the scheme the config names and your own over
+    /// it, and say how to get out of a shell with them — the one key it is
+    /// no use finding out about from inside one.
+    fn use_key_scheme(&mut self) {
+        let scheme = self.config.key_scheme();
+        self.keymap = Keymap::with(scheme, &self.config.keys);
+        let command = self.keymap.shown(Action::Command);
+        self.save_config(format!(
+            "keys: {} — {command} takes the keyboard from a shell",
+            scheme.describe()
+        ));
     }
 
     /// Whether starting up asks about the session before this one.
@@ -8946,6 +8978,39 @@ mod tests {
     }
 
     #[test]
+    fn a_key_scheme_is_switched_under_the_keys_of_your_own() {
+        let dir = scratch("scheme");
+        let mut app = app_in(&dir);
+        let quit = |app: &App| app.keymap.shown(Action::Quit);
+        let command = |app: &App| app.keymap.shown(Action::Command);
+
+        // A key of your own first, so there is something to keep.
+        app.rebind(Action::Quit, crate::keys::Chord::parse("Q").unwrap());
+        assert_eq!(quit(&app), "Q");
+
+        app.change_setting(Setting::KeyScheme, 1);
+        assert_eq!(app.config.key_scheme.as_deref(), Some("tmux"));
+        assert_eq!(command(&app), "Ctrl-b");
+        assert_eq!(quit(&app), "Q", "yours stays yours");
+        assert!(
+            app.status.contains("Ctrl-b"),
+            "and it says how to get out: {}",
+            app.status
+        );
+
+        // Round again is sshman's; clearing it is too, and says nothing about
+        // it in the file.
+        app.change_setting(Setting::KeyScheme, 1);
+        assert_eq!(command(&app), "Ctrl-] / Ctrl-5");
+        app.change_setting(Setting::KeyScheme, 1);
+        app.clear_setting(Setting::KeyScheme);
+        assert_eq!(app.config.key_scheme, None);
+        assert_eq!(command(&app), "Ctrl-] / Ctrl-5");
+        assert_eq!(quit(&app), "Q");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn a_shell_can_be_read_back_from_the_keyboard() {
         let dir = scratch("scroll");
         let mut app = app_in(&dir);
@@ -9705,10 +9770,10 @@ mod tests {
         let dir = scratch("keys-config");
         let mut app = app_in(&dir);
         // What a hand-edited file says.
-        app.keymap = crate::keys::Keymap::with(&std::collections::BTreeMap::from([(
-            "zoom".to_string(),
-            vec!["z".to_string()],
-        )]));
+        app.keymap = crate::keys::Keymap::with(
+            crate::keys::Scheme::Sshman,
+            &std::collections::BTreeMap::from([("zoom".to_string(), vec!["z".to_string()])]),
+        );
 
         press(&mut app, 'z');
         assert!(app.zoomed, "z zooms");

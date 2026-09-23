@@ -1635,7 +1635,7 @@ const THEMES: &[Hint] = &[
 const KEYS: &[Hint] = &[
     ("↑↓", "choose"),
     ("↵", "then press the key you want"),
-    ("Del", "back to the one it ships with"),
+    ("Del", "back to the scheme's"),
     ("Esc", "close"),
 ];
 const REBINDING: &[Hint] = &[("", "press the key you want"), ("Esc", "leave it as it is")];
@@ -2730,13 +2730,20 @@ fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
 pub const HELP: &[(&str, &str)] = &[
     (
         "",
-        "The keys below are the ones sshman ships with. Any you have",
+        "The keys below are sshman's own scheme. The ones you actually",
     ),
     (
         "",
-        "changed are in , → Keys, which is also where you change one:",
+        "have — tmux's, if that is the scheme you chose in , → Key",
     ),
-    ("", "↵ on a line, then press the key you want."),
+    (
+        "",
+        "scheme, and any of your own — are in , → Keys, which is also",
+    ),
+    (
+        "",
+        "where you change one: ↵ on a line, then press the key you want.",
+    ),
     ("", ""),
     ("", "Moving around"),
     ("Tab", "switch between the local and remote pane"),
@@ -3549,10 +3556,13 @@ mod tests {
         let mut screen = String::new();
         for top in (0..HELP.len()).step_by(20) {
             let (_, rows) = frame(90, 40, |app| {
-                app.keymap = crate::keys::Keymap::with(&std::collections::BTreeMap::from([(
-                    "command".to_string(),
-                    vec!["ctrl-b".to_string()],
-                )]));
+                app.keymap = crate::keys::Keymap::with(
+                    crate::keys::Scheme::Sshman,
+                    &std::collections::BTreeMap::from([(
+                        "command".to_string(),
+                        vec!["ctrl-b".to_string()],
+                    )]),
+                );
                 app.mode = Mode::Help;
                 app.help_scroll = top as u16;
             });

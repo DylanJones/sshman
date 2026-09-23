@@ -167,7 +167,9 @@ that can never arrive is worse than saying no.
 (pane arrows under `Ctrl-]`, `↵` to enter a pane, `Esc` to back out, `Alt-1`..`9`).
 Those are how you get *around* sshman, and a rebound one is a way to lock
 yourself out of a box you just opened. Config stores actions naming their keys,
-not the reverse, so an action can have several. Only overrides are written.
+not the reverse, so an action can have several. Only overrides are written,
+and they are written against the key scheme: `sshman`'s own, or `tmux`'s, which
+is a short table of changes beside `DEFAULTS` in `keys.rs`.
 
 **Config files** live in `~/.config/sshman/` (or `$XDG_CONFIG_HOME/sshman/`):
 `config.json`, `hosts.json`, `workspaces.json`, `themes/`. Everything in

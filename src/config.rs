@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::icons::Icons;
+use crate::keys::Scheme;
 use crate::theme;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -89,11 +90,18 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
 
+    /// The keys to start from: `sshman`'s own, or `tmux`'s, which makes
+    /// `Ctrl-b` the prefix and puts split, zoom, close and scroll back where
+    /// tmux has them. Absent, or a name this version does not know, means
+    /// sshman's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_scheme: Option<String>,
+
     /// Keys of your own, by what they do: `"quit": ["Q"]`.
     ///
     /// Only what you have changed is written here; everything else keeps the
-    /// scheme sshman ships, so this file says what you decided rather than
-    /// repeating fifty things you did not.
+    /// key scheme's, so this file says what you decided rather than repeating
+    /// fifty things you did not.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub keys: BTreeMap<String, Vec<String>>,
 
@@ -192,6 +200,13 @@ impl Config {
     /// Whether to ask, on the way in, about coming back to the last session.
     /// Read the same forgiving way as the rest: only a word meaning no turns
     /// it off.
+    pub fn key_scheme(&self) -> Scheme {
+        self.key_scheme
+            .as_deref()
+            .and_then(Scheme::by_name)
+            .unwrap_or_default()
+    }
+
     pub fn offering_resume(&self) -> bool {
         !matches!(
             self.resume.as_deref().map(str::trim),
@@ -254,6 +269,7 @@ pub enum Setting {
     Icons,
     Watch,
     Resume,
+    KeyScheme,
     Keys,
 }
 
@@ -276,6 +292,7 @@ impl Setting {
         Setting::Icons,
         Setting::Watch,
         Setting::Resume,
+        Setting::KeyScheme,
         Setting::Keys,
     ];
 
@@ -290,6 +307,7 @@ impl Setting {
             Self::Icons => "Icons",
             Self::Watch => "Keeping up",
             Self::Resume => "Coming back",
+            Self::KeyScheme => "Key scheme",
             Self::Keys => "Keys",
         }
     }
@@ -306,6 +324,7 @@ impl Setting {
             Self::Icons => "a glyph in front of each name, if your font has them",
             Self::Watch => "whether a list keeps up with changes from outside",
             Self::Resume => "whether starting up offers the session before this one",
+            Self::KeyScheme => "the keys you start from, before any of your own",
             Self::Keys => "which key asks for what",
         }
     }
@@ -319,6 +338,7 @@ impl Setting {
             | Self::Icons
             | Self::Watch
             | Self::Resume
+            | Self::KeyScheme
             | Self::Keys => Kind::Choice,
         }
     }
@@ -358,8 +378,9 @@ impl Config {
                 true => "asked on the way in".into(),
                 false => "only when you ask for it".into(),
             },
+            Setting::KeyScheme => self.key_scheme().describe().to_string(),
             Setting::Keys => match self.keys.len() {
-                0 => "the ones sshman ships".into(),
+                0 => "the scheme's, all of them".into(),
                 1 => "1 key of your own".into(),
                 n => format!("{n} keys of your own"),
             },
@@ -395,6 +416,10 @@ impl Config {
                 false => "the default",
             },
             Setting::Resume => match self.resume.is_some() {
+                true => "set here",
+                false => "the default",
+            },
+            Setting::KeyScheme => match self.key_scheme.is_some() {
                 true => "set here",
                 false => "the default",
             },
@@ -437,6 +462,7 @@ impl Config {
             Setting::Icons => self.icons.is_some(),
             Setting::Watch => self.watch.is_some(),
             Setting::Resume => self.resume.is_some(),
+            Setting::KeyScheme => self.key_scheme.is_some(),
             Setting::Keys => !self.keys.is_empty(),
             Setting::Theme => self.theme_name().is_some(),
         }
@@ -778,6 +804,15 @@ mod tests {
     fn settings_with_nowhere_to_live_say_so_rather_than_pretending() {
         let config = Config::default();
         assert!(config.save().is_err());
+    }
+
+    #[test]
+    fn a_key_scheme_this_version_does_not_know_is_sshmans() {
+        let config: Config = serde_json::from_str(r#"{"key_scheme": "emacs"}"#).unwrap();
+        assert_eq!(config.key_scheme(), Scheme::Sshman);
+        let config: Config = serde_json::from_str(r#"{"key_scheme": "tmux"}"#).unwrap();
+        assert_eq!(config.key_scheme(), Scheme::Tmux);
+        assert_eq!(Config::default().key_scheme(), Scheme::Sshman);
     }
 
     #[test]
