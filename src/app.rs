@@ -1077,6 +1077,10 @@ pub struct App {
     /// The focused pane has been picked up: the arrows shove it about the
     /// arrangement rather than moving the keyboard through it.
     pub carrying: bool,
+    /// The keys are reading back through the focused terminal's history
+    /// rather than typing into it, the way tmux's copy mode does. The shell
+    /// keeps running underneath; it just is not being typed at.
+    pub scrolling: bool,
     /// A pane being dragged by its name with the mouse, and the pane it would
     /// change places with if the button came up now.
     pub moving: Option<Slot>,
@@ -1254,6 +1258,7 @@ impl App {
             commanding: false,
             command_from: None,
             carrying: false,
+            scrolling: false,
             moving: None,
             move_over: None,
             copied: None,
@@ -3011,6 +3016,13 @@ impl App {
             return self.menu_key(key);
         }
 
+        // Reading back through a terminal: the keys move the view, and
+        // anything it does not use is dropped rather than typed into a shell
+        // you are not looking at the bottom of.
+        if self.mode == Mode::Browse && self.scrolling && self.scroll_key(key) {
+            return;
+        }
+
         // With the keyboard handed over, every key is sshman's — including
         // the ones a shell would otherwise swallow.
         if self.mode == Mode::Browse && self.commanding {
@@ -3462,10 +3474,85 @@ impl App {
         self.command_from = None;
         self.settle_focus();
         let name = self.pane_name(self.focus);
+        let command = self.keymap.shown(Action::Command);
         self.set_status(
-            format!("{name} — Ctrl-] takes the keyboard back"),
+            format!("{name} — {command} takes the keyboard back"),
             Level::Info,
         );
+    }
+
+    // ---- reading back through a terminal -------------------------------------
+
+    /// Start reading back through the focused terminal's history.
+    fn start_scroll(&mut self) {
+        if self.shell(self.focus).is_none() {
+            self.set_status("only a terminal pane has history to read back", Level::Info);
+            return;
+        }
+        self.scrolling = true;
+        self.commanding = false;
+        self.carrying = false;
+        self.command_from = None;
+        self.set_status(
+            "reading back — ↑↓ PgUp PgDn g G move, q or Esc goes back to the prompt",
+            Level::Info,
+        );
+    }
+
+    /// Stop reading back, and put the view back at the prompt.
+    fn stop_scroll(&mut self) {
+        self.scrolling = false;
+        if let Some(shell) = self.shell_mut(self.focus) {
+            shell.scroll(-(crate::shell::SCROLLBACK as isize));
+        }
+    }
+
+    /// A key while reading back. Says whether it took it: one it gives back
+    /// is for whatever is focused now, once the terminal has gone.
+    fn scroll_key(&mut self, key: KeyEvent) -> bool {
+        // The pane went, or a click moved the focus to one with no history.
+        let Some(rows) = self
+            .shell(self.focus)
+            .map(|s| s.with_screen(|screen| screen.size().0 as isize))
+        else {
+            self.scrolling = false;
+            return false;
+        };
+        if self.keymap.action(&key) == Some(Action::Command) {
+            self.stop_scroll();
+            self.enter_command();
+            return true;
+        }
+        let page = rows.max(2) - 1;
+        let half = (rows / 2).max(1);
+        let all = crate::shell::SCROLLBACK as isize;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let lines = match key.code {
+            KeyCode::Up | KeyCode::Char('k') if !ctrl => 1,
+            KeyCode::Down | KeyCode::Char('j') if !ctrl => -1,
+            KeyCode::Char('u') if ctrl => half,
+            KeyCode::Char('d') if ctrl => -half,
+            KeyCode::Char('b') if ctrl => page,
+            KeyCode::Char('f') if ctrl => -page,
+            KeyCode::PageUp => page,
+            KeyCode::PageDown | KeyCode::Char(' ') => -page,
+            KeyCode::Home | KeyCode::Char('g') => all,
+            KeyCode::End | KeyCode::Char('G') => -all,
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                self.stop_scroll();
+                let command = self.keymap.shown(Action::Command);
+                self.set_status(
+                    format!("back at the prompt — {command} takes the keyboard back"),
+                    Level::Info,
+                );
+                return true;
+            }
+            _ => return true,
+        };
+        if let Some(shell) = self.shell_mut(self.focus) {
+            shell.scroll(lines);
+        }
+        true
     }
 
     // ---- picking text out of a terminal --------------------------------------
@@ -3723,6 +3810,7 @@ impl App {
 
             // ---- panes ----
             Action::Zoom => self.toggle_zoom(),
+            Action::Scroll => self.start_scroll(),
             Action::Even => self.reset_layout(),
             Action::Arrange => self.open_arrangements(),
             Action::Split => self.split_with_term(Dir::Across, 50),
@@ -6170,8 +6258,9 @@ impl App {
         self.zoomed = false;
         self.stash_layout();
         let name = self.pane_name(slot);
+        let command = self.keymap.shown(Action::Command);
         self.set_status(
-            format!("{name} open — Ctrl-] returns to the files"),
+            format!("{name} open — {command} returns to the files"),
             Level::Good,
         );
     }
@@ -8852,6 +8941,41 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         });
+    }
+
+    #[test]
+    fn a_shell_can_be_read_back_from_the_keyboard() {
+        let dir = scratch("scroll");
+        let mut app = app_in(&dir);
+        let shell = add_term(&mut app, Side::Local, Shell::spawn_local(&dir, 24, 80));
+        app.focus_pane(shell);
+
+        // The prefix, then the scroll key, as tmux spells copy mode.
+        command(&mut app);
+        press(&mut app, '[');
+        assert!(app.scrolling, "reading back");
+        assert!(
+            !app.commanding,
+            "and the keyboard is the scroll's, not sshman's"
+        );
+
+        // A key it has no use for goes nowhere: not to the shell, not to a
+        // file command.
+        let panes = app.layout.panes();
+        press(&mut app, '|');
+        assert!(app.scrolling);
+        assert_eq!(app.layout.panes(), panes);
+
+        press(&mut app, 'q');
+        assert!(!app.scrolling);
+        assert!(app.in_term(), "the shell has the keyboard again");
+        assert_eq!(app.shell(shell).map(Shell::scrollback), Some(0));
+
+        // A file list has no history, so there is nothing to start.
+        app.focus_pane(Slot::files(Side::Local));
+        press(&mut app, '[');
+        assert!(!app.scrolling);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

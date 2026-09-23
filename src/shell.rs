@@ -37,7 +37,7 @@ use crate::sshconn::{ConnectOpts, establish};
 use crate::types::sh_quote;
 
 /// Lines of history kept above the visible screen.
-const SCROLLBACK: usize = 5_000;
+pub const SCROLLBACK: usize = 5_000;
 
 enum Msg {
     Bytes(Vec<u8>),
