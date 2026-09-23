@@ -473,12 +473,18 @@ mod tests {
     fn a_command_that_reads_stdin_sees_the_end_of_it() {
         // stdin is a pipe we hold; only the password ever goes in. If it were
         // left open, anything reading it would wait for input that is never
-        // coming — `timeout` turns that hang into a failure rather than a
-        // test that never returns.
+        // coming. The wait below turns that hang into a failure rather than a
+        // test that never returns — here rather than with `timeout`, which is
+        // GNU's and not on a Mac unless someone installed coreutils.
         let dir = scratch("stdin");
         let c = conn(&dir);
-        let (out, _, code) = c.run("timeout 5 cat", false).unwrap();
-        assert_eq!(code, 0, "reading stdin must not hang");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(c.run("cat", false)));
+        let (out, _, code) = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading stdin must not hang")
+            .unwrap();
+        assert_eq!(code, 0);
         assert!(out.is_empty(), "and there is nothing in it: {out:?}");
         fs::remove_dir_all(&dir).ok();
     }
