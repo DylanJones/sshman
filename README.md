@@ -32,6 +32,15 @@ the server.
 
 ## Install
 
+[Releases](https://github.com/Tinfold/sshman/releases) has a binary for
+Linux (x86_64 and arm64, fully static) and macOS (Apple silicon and Intel),
+built from every change to `main`. The ones named for a version, like `0.1.0`,
+are the first build of it; the ones with a commit after it, like
+`0.1.0-abc1234`, are the builds since. Unpack one and put `sshman` on your
+`PATH`.
+
+Or build it yourself:
+
 ```sh
 cargo build --release
 # -> target/release/sshman
