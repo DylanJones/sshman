@@ -3462,10 +3462,25 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
 
+    /// A directory of its own for each frame. One per process was shared by
+    /// every test running alongside, and whichever finished first took it
+    /// away from the rest.
+    ///
+    /// Under `/tmp` rather than the system's temporary directory, which on
+    /// macOS is forty characters of `/var/folders/…` — long enough that a
+    /// half-width pane shortens the trail, and the crumb tests are about the
+    /// trail at full length.
+    fn scratch() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = std::path::Path::new("/tmp").canonicalize().unwrap();
+        tmp.join(format!("sshman-ui-{}-{n}", std::process::id()))
+    }
+
     /// Draw a whole frame and hand back the screen itself, for tests that
     /// care about how a cell is painted rather than what it says.
     fn painted(width: u16, height: u16, setup: impl FnOnce(&mut App)) -> (App, Buffer) {
-        let dir = std::env::temp_dir().join(format!("sshman-ui-{}", std::process::id()));
+        let dir = scratch();
         std::fs::create_dir_all(&dir).unwrap();
         let mut app = App::new(ConnectOpts::default(), dir.clone(), None, false);
         app.mode = Mode::Browse;
@@ -3481,7 +3496,7 @@ mod tests {
     /// Draw a whole frame and hand back what landed on the screen, along with
     /// the app that recorded where it put things.
     fn frame(width: u16, height: u16, setup: impl FnOnce(&mut App)) -> (App, Vec<String>) {
-        let dir = std::env::temp_dir().join(format!("sshman-ui-{}", std::process::id()));
+        let dir = scratch();
         std::fs::create_dir_all(&dir).unwrap();
         let mut app = App::new(ConnectOpts::default(), dir.clone(), None, false);
         app.mode = Mode::Browse;

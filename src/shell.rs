@@ -707,8 +707,15 @@ fn configured_shell() -> Option<String> {
 }
 
 /// The program a shell pane on this machine runs.
+///
+/// Under test it is `/bin/sh` unless a test says otherwise. The shell of
+/// whoever runs them brings their startup files along, and a prompt that
+/// takes a few seconds to draw is not something sshman got wrong.
 pub fn local_shell() -> String {
-    configured_shell().unwrap_or_else(crate::config::default_shell)
+    configured_shell().unwrap_or_else(|| match cfg!(test) {
+        true => "/bin/sh".into(),
+        false => crate::config::default_shell(),
+    })
 }
 
 /// Everything the program inside says, on its way to the screen.
@@ -2257,7 +2264,11 @@ mod tests {
         set_rich_keys(false);
     }
 
+    /// Linux only: that is where the kernel says where a process is. Anywhere
+    /// else a shell is only followed if its prompt sends OSC 7, which the
+    /// plain `sh` a test starts does not.
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_local_shell_that_moves_says_where_it_went() {
         // A real pty and a real shell: the point is that `cd` inside one is
         // noticed from out here, which is what a saved session writes down.

@@ -1013,8 +1013,23 @@ mod tests {
 
     /// An app drawn once at this size, so everything the mouse aims at — the
     /// pane areas, the buttons, the crumbs along a title — has been placed.
+    /// `/tmp` as the kernel spells it: `/private/tmp` on macOS.
+    fn tmp() -> String {
+        std::path::Path::new("/tmp")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    }
+
+    /// Drawn in a directory of its own under `/tmp`: short enough that the
+    /// trail of crumbs is never shortened to fit, and not shared with a test
+    /// running alongside, which would take it away when it finished.
     fn drawn(width: u16, height: u16, setup: impl FnOnce(&mut App)) -> App {
-        let dir = std::env::temp_dir().join(format!("sshman-mouse-{}", std::process::id()));
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::path::Path::new(&tmp()).join(format!("sshman-mouse-{}-{n}", std::process::id()));
         std::fs::create_dir_all(dir.join("inner")).unwrap();
         let mut app = App::new(ConnectOpts::default(), dir.clone(), None, false);
         app.mode = Mode::Browse;
@@ -1116,10 +1131,11 @@ mod tests {
     fn a_click_on_a_crumb_lands_on_the_directory_it_names() {
         let here = layout::Slot::files(app::Side::Local);
         let mut app = drawn(110, 30, |_| {});
+        let tmp = tmp();
         let (rect, _, path) = app
             .crumbs
             .iter()
-            .find(|(_, slot, path)| *slot == here && path.as_str() == "/tmp")
+            .find(|(_, slot, path)| *slot == here && *path == tmp)
             .cloned()
             .expect("/tmp is a piece of the path this test runs in");
 
@@ -1134,7 +1150,7 @@ mod tests {
             &mut app,
             at(MouseEventKind::Down(MouseButton::Left), rect.x, rect.y),
         );
-        assert_eq!(app.path_of(here), "/tmp", "and a click goes there");
+        assert_eq!(app.path_of(here), tmp, "and a click goes there");
     }
 
     /// A pane ten rows tall at the top left: one border row, eight rows of

@@ -7486,12 +7486,15 @@ mod tests {
         app
     }
 
+    /// Spelled the way the kernel spells it, since that is how a list that
+    /// has been into it reports where it is: `/var` is a link to
+    /// `/private/var` on macOS.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sshman-app-{}-{name}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(dir.join("dst")).unwrap();
         std::fs::write(dir.join("one.txt"), b"one\n").unwrap();
-        dir
+        dir.canonicalize().unwrap()
     }
 
     fn key(app: &mut App, code: KeyCode) {
