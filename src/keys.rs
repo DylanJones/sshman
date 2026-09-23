@@ -625,10 +625,86 @@ const DEFAULTS: &[(Action, &[&str])] = &[
     (Action::Quit, &["q"]),
 ];
 
+/// What the tmux scheme changes from sshman's own, in the same form: an
+/// action, and the chords that ask for it instead.
+///
+/// The prefix, and the keys that follow it in tmux — split, zoom, close,
+/// scroll back — where they do not fight a file list for the key. `z` and `x`
+/// were packing and unpacking, which move to `Z` and `u`. The shipped keys
+/// stay beside the tmux ones wherever they do not clash, so a key in the
+/// readme still works.
+const TMUX: &[(Action, &[&str])] = &[
+    (Action::Command, &["ctrl-b"]),
+    (Action::Split, &["%", "|"]),
+    (Action::SplitDown, &["\"", "_"]),
+    (Action::Zoom, &["z", "F3"]),
+    (Action::ClosePane, &["x", "F9"]),
+    (Action::Scroll, &["[", "]"]),
+    (Action::CloseTab, &["&", "W"]),
+    (Action::Archive, &["Z"]),
+    (Action::Extract, &["u"]),
+];
+
+/// The keys a keymap starts from, before any of your own.
+///
+/// A scheme is only ever a starting point: a key of your own is laid over
+/// whichever one is chosen, and switching schemes keeps it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Scheme {
+    #[default]
+    Sshman,
+    Tmux,
+}
+
+impl Scheme {
+    pub const ALL: &'static [Scheme] = &[Scheme::Sshman, Scheme::Tmux];
+
+    /// As a config file writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sshman => "sshman",
+            Self::Tmux => "tmux",
+        }
+    }
+
+    pub fn by_name(name: &str) -> Option<Self> {
+        let name = name.trim();
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|scheme| scheme.name().eq_ignore_ascii_case(name))
+    }
+
+    /// As the settings pane says it.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Sshman => "sshman's own",
+            Self::Tmux => "tmux's: Ctrl-b, then % \" z x [",
+        }
+    }
+
+    /// The one after this, or before it: how the settings pane steps.
+    pub fn step(self, by: isize) -> Self {
+        let at = Self::ALL.iter().position(|s| *s == self).unwrap_or(0) as isize;
+        let len = Self::ALL.len() as isize;
+        Self::ALL[(at + by).rem_euclid(len) as usize]
+    }
+
+    fn changes(self) -> &'static [(Action, &'static [&'static str])] {
+        match self {
+            Self::Sshman => &[],
+            Self::Tmux => TMUX,
+        }
+    }
+}
+
 /// Which chords ask for what.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Keymap {
     binds: BTreeMap<Action, Vec<Chord>>,
+    /// Where these keys started from, which is what a key goes back to when
+    /// it is reset, and what a config file's keys are written against.
+    scheme: Scheme,
     /// Bindings in a config file that could not be used, in the words to show
     /// someone wondering why their key does nothing.
     pub problems: Vec<String>,
@@ -636,8 +712,18 @@ pub struct Keymap {
 
 impl Default for Keymap {
     fn default() -> Self {
+        Self::of(Scheme::Sshman)
+    }
+}
+
+impl Keymap {
+    /// A scheme's keys, and nothing of your own.
+    pub fn of(scheme: Scheme) -> Self {
         let mut binds = BTreeMap::new();
-        for (action, chords) in DEFAULTS {
+        // The scheme's changes replace an action's keys whole, the same as a
+        // config file's would. None of them takes a key some other action in
+        // the defaults keeps; a test holds each scheme to that.
+        for (action, chords) in DEFAULTS.iter().chain(scheme.changes()) {
             binds.insert(
                 *action,
                 chords.iter().filter_map(|c| Chord::parse(c)).collect(),
@@ -645,17 +731,20 @@ impl Default for Keymap {
         }
         Self {
             binds,
+            scheme,
             problems: Vec::new(),
         }
     }
-}
 
-impl Keymap {
-    /// The default scheme with a config file's changes over the top. An action
-    /// the file names takes the chords it gives and no others; one it does not
-    /// name keeps what it had.
-    pub fn with(overrides: &BTreeMap<String, Vec<String>>) -> Self {
-        let mut map = Self::default();
+    pub fn scheme(&self) -> Scheme {
+        self.scheme
+    }
+
+    /// A scheme with a config file's changes over the top. An action the file
+    /// names takes the chords it gives and no others; one it does not name
+    /// keeps what the scheme gave it.
+    pub fn with(scheme: Scheme, overrides: &BTreeMap<String, Vec<String>>) -> Self {
+        let mut map = Self::of(scheme);
         let mut claimed: Vec<(Chord, Action)> = Vec::new();
         for (name, chords) in overrides {
             let Some(action) = Action::by_name(name) else {
@@ -779,19 +868,15 @@ impl Keymap {
 
     /// Put an action back to the chords it started with.
     pub fn reset(&mut self, action: Action) {
-        let chords = DEFAULTS
-            .iter()
-            .find(|(a, _)| *a == action)
-            .map(|(_, chords)| chords.iter().filter_map(|c| Chord::parse(c)).collect())
-            .unwrap_or_default();
+        let chords = Self::of(self.scheme).chords(action).to_vec();
         self.binds.insert(action, chords);
     }
 
-    /// Everything that differs from the scheme sshman ships, in the form a
-    /// config file writes it. What is unchanged is left out, so a file says
-    /// only what you have actually decided.
+    /// Everything that differs from the scheme these keys started from, in
+    /// the form a config file writes it. What is unchanged is left out, so a
+    /// file says only what you have actually decided.
     pub fn overrides(&self) -> BTreeMap<String, Vec<String>> {
-        let plain = Self::default();
+        let plain = Self::of(self.scheme);
         let mut out = BTreeMap::new();
         for action in Action::ALL {
             let mine = self.chords(*action);
@@ -868,26 +953,90 @@ mod tests {
     }
 
     #[test]
-    fn the_tmux_keys_in_contrib_still_mean_something() {
-        // An example nobody runs goes stale the day an action is renamed, and
-        // then someone copies it and finds their prefix key does nothing.
-        #[derive(serde::Deserialize)]
-        struct File {
-            keys: BTreeMap<String, Vec<String>>,
-        }
-        let file: File =
-            serde_json::from_str(include_str!("../contrib/tmux.json")).expect("it is JSON");
-        let map = Keymap::with(&file.keys);
-        assert!(map.problems.is_empty(), "{:?}", map.problems);
+    fn the_tmux_scheme_is_tmux_where_it_can_be() {
+        let map = Keymap::of(Scheme::Tmux);
+        let press = |code, mods| map.action(&key(code, mods));
         assert_eq!(
-            map.action(&key(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            press(KeyCode::Char('b'), KeyModifiers::CONTROL),
             Some(Action::Command)
         );
         assert_eq!(
-            map.action(&key(KeyCode::Char('%'), KeyModifiers::SHIFT)),
+            press(KeyCode::Char('%'), KeyModifiers::SHIFT),
             Some(Action::Split),
             "a symbol's shift is the keyboard's business"
         );
+        assert_eq!(
+            press(KeyCode::Char('"'), KeyModifiers::SHIFT),
+            Some(Action::SplitDown)
+        );
+        assert_eq!(
+            press(KeyCode::Char('z'), KeyModifiers::NONE),
+            Some(Action::Zoom)
+        );
+        assert_eq!(
+            press(KeyCode::Char('x'), KeyModifiers::NONE),
+            Some(Action::ClosePane)
+        );
+        assert_eq!(
+            press(KeyCode::Char('['), KeyModifiers::NONE),
+            Some(Action::Scroll)
+        );
+        // What tmux took a key from still has one.
+        assert_eq!(
+            press(KeyCode::Char('Z'), KeyModifiers::SHIFT),
+            Some(Action::Archive)
+        );
+        assert_eq!(
+            press(KeyCode::Char('u'), KeyModifiers::NONE),
+            Some(Action::Extract)
+        );
+        // And the rest is sshman's.
+        assert_eq!(
+            press(KeyCode::Char('q'), KeyModifiers::NONE),
+            Some(Action::Quit)
+        );
+        assert_eq!(press(KeyCode::Char(']'), KeyModifiers::CONTROL), None);
+    }
+
+    #[test]
+    fn every_scheme_leaves_every_action_a_key_and_no_key_two_actions() {
+        for scheme in Scheme::ALL {
+            let mut map = Keymap::of(*scheme);
+            map.report_clashes();
+            assert!(
+                map.problems.is_empty(),
+                "{}: {:?}",
+                scheme.name(),
+                map.problems
+            );
+            for action in Action::ALL {
+                assert!(
+                    !map.chords(*action).is_empty(),
+                    "{} leaves {} with no key",
+                    scheme.name(),
+                    action.name()
+                );
+            }
+            assert_eq!(Scheme::by_name(scheme.name()), Some(*scheme));
+        }
+        assert_eq!(Scheme::by_name(" TMUX "), Some(Scheme::Tmux));
+        assert_eq!(Scheme::by_name("emacs"), None);
+    }
+
+    #[test]
+    fn keys_of_your_own_are_kept_against_the_scheme_they_were_made_in() {
+        // Your own key over tmux's: written down as the one change it is,
+        // not as the eight tmux makes as well.
+        let mut map = Keymap::of(Scheme::Tmux);
+        map.bind(Action::Quit, Chord::parse("Q").unwrap());
+        let written = map.overrides();
+        assert_eq!(written.len(), 1, "{written:?}");
+        assert_eq!(Keymap::with(Scheme::Tmux, &written), map);
+
+        // And a key put back goes back to the scheme's, not sshman's.
+        map.bind(Action::Command, Chord::parse("ctrl-a").unwrap());
+        map.reset(Action::Command);
+        assert_eq!(map.shown(Action::Command), "Ctrl-b");
     }
 
     #[test]
@@ -921,7 +1070,7 @@ mod tests {
     fn a_config_file_changes_only_what_it_names() {
         let mut overrides = BTreeMap::new();
         overrides.insert("quit".to_string(), vec!["Q".to_string()]);
-        let map = Keymap::with(&overrides);
+        let map = Keymap::with(Scheme::Sshman, &overrides);
 
         assert!(map.problems.is_empty(), "{:?}", map.problems);
         assert_eq!(
@@ -949,7 +1098,7 @@ mod tests {
         // can make that sshman cannot settle for it.
         overrides.insert("help".into(), vec!["w".into()]);
         overrides.insert("output".into(), vec!["w".into()]);
-        let map = Keymap::with(&overrides);
+        let map = Keymap::with(Scheme::Sshman, &overrides);
 
         assert_eq!(map.problems.len(), 3, "{:?}", map.problems);
         assert!(map.problems.iter().any(|p| p.contains("nonsense")));
@@ -965,7 +1114,7 @@ mod tests {
     fn a_key_a_file_asks_for_is_taken_off_whatever_had_it() {
         let mut overrides = BTreeMap::new();
         overrides.insert("zoom".to_string(), vec!["z".to_string()]);
-        let map = Keymap::with(&overrides);
+        let map = Keymap::with(Scheme::Sshman, &overrides);
 
         assert!(map.problems.is_empty(), "{:?}", map.problems);
         assert_eq!(
@@ -1022,6 +1171,6 @@ mod tests {
         );
 
         // And what is written down comes back as what it was.
-        assert_eq!(Keymap::with(&written), map);
+        assert_eq!(Keymap::with(Scheme::Sshman, &written), map);
     }
 }

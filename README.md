@@ -120,12 +120,13 @@ make sense there:
 
 `Esc` or `Ctrl-]` again puts the keyboard back where it was.
 
-Coming from tmux? [`contrib/tmux.json`](contrib/tmux.json) is a set of keys
-that makes this feel like home: `Ctrl-b` as the prefix, then `%` and `"` to
-split, `z` to zoom, `x` to close, `[` to scroll back, `&` to close a tab.
-Copy its `"keys"` into your `config.json`. It moves two keys to make room:
-packing an archive becomes `Z` and unpacking `u`. And `Ctrl-b` no longer
-reaches the shell, where it moves the cursor back; `←` does the same.
+Coming from tmux? Set **Key scheme** to `tmux` (`,` in sshman, or
+`"key_scheme": "tmux"` in `config.json`) and the keys feel like home: `Ctrl-b`
+as the prefix, then `%` and `"` to split, `z` to zoom, `x` to close, `[` to
+scroll back, `&` to close a tab. The shipped keys stay beside them wherever
+they do not clash. Two move to make room: packing an archive becomes `Z` and
+unpacking `u`. And `Ctrl-b` no longer reaches the shell, where it moves the
+cursor back; `←` does the same. Keys of your own apply over either scheme.
 
 ## What it does
 
@@ -194,6 +195,7 @@ optional:
   "theme": "gruvbox",
   "icons": "nerd",
   "watch": "off",
+  "key_scheme": "tmux",
   "keys": {
     "quit": ["Q"],
     "zoom": ["z", "F3"]
