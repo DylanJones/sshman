@@ -3269,12 +3269,14 @@ impl App {
         self.start_connect();
     }
 
-    /// The key after `Ctrl-]`: the pane commands, for when the keyboard is in
-    /// a shell and every ordinary key belongs to it.
+    /// The key after the command key (`Ctrl-]` unless rebound): for when the
+    /// keyboard is in a shell and every ordinary key belongs to it.
     ///
-    /// They are the browsing keys in lower case — `s` for the shell `S` opens,
-    /// `x` for the close `F9` does — so there is one set to remember rather
-    /// than two.
+    /// The arrows, and `h j k l` beside them, move between panes; Shift moves
+    /// a border; `g` picks the pane up; `↵` and `Esc` hand the keyboard back.
+    /// Those are fixed, being how you get around. Every other key is the same
+    /// browsing key it is with a file list focused — `S` opens a shell, `F9`
+    /// closes a pane — so there is one set to remember rather than two.
     fn command_key(&mut self, key: KeyEvent) {
         // A pane that has been picked up: the arrows move the pane itself,
         // and everything else puts it down first.
